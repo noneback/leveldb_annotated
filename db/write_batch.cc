@@ -129,6 +129,7 @@ class MemTableInserter : public WriteBatch::Handler {
 };
 }  // namespace
 
+// InsertInto insert write batch opt into memtable
 Status WriteBatchInternal::InsertInto(const WriteBatch* b, MemTable* memtable) {
   MemTableInserter inserter;
   inserter.sequence_ = WriteBatchInternal::Sequence(b);

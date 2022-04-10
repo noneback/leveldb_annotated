@@ -4,14 +4,6 @@
 
 #include "db/db_impl.h"
 
-#include <algorithm>
-#include <atomic>
-#include <cstdint>
-#include <cstdio>
-#include <set>
-#include <string>
-#include <vector>
-
 #include "db/builder.h"
 #include "db/db_iter.h"
 #include "db/dbformat.h"
@@ -22,11 +14,20 @@
 #include "db/table_cache.h"
 #include "db/version_set.h"
 #include "db/write_batch_internal.h"
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <set>
+#include <string>
+#include <vector>
+
 #include "leveldb/db.h"
 #include "leveldb/env.h"
 #include "leveldb/status.h"
 #include "leveldb/table.h"
 #include "leveldb/table_builder.h"
+
 #include "port/port.h"
 #include "table/block.h"
 #include "table/merger.h"
@@ -289,6 +290,7 @@ void DBImpl::RemoveObsoleteFiles() {
   mutex_.Lock();
 }
 
+// Recover 需要从manifest和wal log中恢复数据库状态
 Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   mutex_.AssertHeld();
 
@@ -298,11 +300,14 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   env_->CreateDir(dbname_);
   assert(db_lock_ == nullptr);
   Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
+  // lockfile LOCKFILE 表示 当前是否有DB实例在运行，一份数据只能有一个db操作
   if (!s.ok()) {
     return s;
   }
 
   if (!env_->FileExists(CurrentFileName(dbname_))) {
+    // QA: 没有CURRENT FILE 证明数据库missing?
+    // 如果是人为删除了呢？无法恢复？是，current file 标记db是否存在
     if (options_.create_if_missing) {
       Log(options_.info_log, "Creating DB %s since it was missing.",
           dbname_.c_str());
@@ -316,20 +321,25 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     }
   } else {
     if (options_.error_if_exists) {
-      return Status::InvalidArgument(dbname_,
-                                     "exists (error_if_exists is true)");
+      return Status::InvalidArgument(dbname_, "exists (error_if_exists is true)");
     }
   }
 
-  s = versions_->Recover(save_manifest);
+  s = versions_->Recover(save_manifest);  // 从manifest中恢复最新的versionSet
   if (!s.ok()) {
     return s;
   }
-  SequenceNumber max_sequence(0);
+  // DB回复到上次退出时的manifest保存的状态
 
+  // 从wal文件中修正last_seq, next_file_number
+  SequenceNumber max_sequence(
+      0);  // QA:为啥要设置为0, version + seq的设计？last_seq holder
   // Recover from all newer log files than the ones named in the
   // descriptor (new log files may have been added by the previous
   // incarnation without registering them in the descriptor).
+  // QA:
+  // 有的新log的存在可能没有被记录到manifest中，还需要从新log文件中回复一些状态?
+  // 什么情况会有未处理的log文件？这里的log文件指WAL文件
   //
   // Note that PrevLogNumber() is no longer used, but we pay
   // attention to it in case we are recovering a database
@@ -337,20 +347,20 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   const uint64_t min_log = versions_->LogNumber();
   const uint64_t prev_log = versions_->PrevLogNumber();
   std::vector<std::string> filenames;
-  s = env_->GetChildren(dbname_, &filenames);
+  s = env_->GetChildren(dbname_, &filenames);  // get filenames in dbname dir
   if (!s.ok()) {
     return s;
   }
-  std::set<uint64_t> expected;
+  std::set<uint64_t> expected;  // 在mvcc中使用到的文件集合
   versions_->AddLiveFiles(&expected);
   uint64_t number;
   FileType type;
-  std::vector<uint64_t> logs;
+  std::vector<uint64_t> logs;  // QA: 记录了什么
   for (size_t i = 0; i < filenames.size(); i++) {
     if (ParseFileName(filenames[i], &number, &type)) {
       expected.erase(number);
       if (type == kLogFile && ((number >= min_log) || (number == prev_log)))
-        logs.push_back(number);
+        logs.push_back(number);  // 之前未处理的wal log文件
     }
   }
   if (!expected.empty()) {
@@ -372,7 +382,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     // The previous incarnation may not have written any MANIFEST
     // records after allocating this log number.  So we manually
     // update the file number allocation counter in VersionSet.
-    versions_->MarkFileNumberUsed(logs[i]);
+    versions_->MarkFileNumberUsed(logs[i]);  // 更新next_file_number
   }
 
   if (versions_->LastSequence() < max_sequence) {
@@ -382,6 +392,9 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   return Status::OK();
 }
 
+// RecoverLogFile 从WAL的log文件中修正db从manifest文件中的max_sequence
+// 按照record读取wal log 到memtable中，当memtable到达与之，会触发compact，
+// 生成新的level sst，产生VersionEdit
 Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
                               bool* save_manifest, VersionEdit* edit,
                               SequenceNumber* max_sequence) {
@@ -418,7 +431,7 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   // We intentionally make log::Reader do checksumming even if
   // paranoid_checks==false so that corruptions cause entire commits
   // to be skipped instead of propagating bad information (like overly
-  // large sequence numbers).
+  // large sequence numbers)
   log::Reader reader(file, &reporter, true /*checksum*/, 0 /*initial_offset*/);
   Log(options_.info_log, "Recovering log #%llu",
       (unsigned long long)log_number);
@@ -429,6 +442,7 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   WriteBatch batch;
   int compactions = 0;
   MemTable* mem = nullptr;
+  // 读取每个record到memtable，以获取last_seq, memtable可能会dump到level0
   while (reader.ReadRecord(&record, &scratch) && status.ok()) {
     if (record.size() < 12) {
       reporter.Corruption(record.size(),
@@ -1480,6 +1494,9 @@ Status DB::Delete(const WriteOptions& opt, const Slice& key) {
 
 DB::~DB() = default;
 
+/**
+ * Open 流程：1.创建db实例 2.检查元数据并从原来的数据库中恢复 3.后续处理
+ */
 Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   *dbptr = nullptr;
 
@@ -1487,33 +1504,35 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   impl->mutex_.Lock();
   VersionEdit edit;
   // Recover handles create_if_missing, error_if_exists
-  bool save_manifest = false;
-  Status s = impl->Recover(&edit, &save_manifest);
+  bool save_manifest = false;  // QA: 这个变量的作用是什么？记录是否需要保存manifest, 一般来说都需要
+  Status s = impl->Recover(&edit, &save_manifest);  // 从元数据文件和log文件中回复DB状态
+
   if (s.ok() && impl->mem_ == nullptr) {
     // Create new log and a corresponding memtable.
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     WritableFile* lfile;
-    s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
-                                     &lfile);
+    s = options.env->NewWritableFile(LogFileName(dbname, new_log_number), &lfile);
     if (s.ok()) {
       edit.SetLogNumber(new_log_number);
       impl->logfile_ = lfile;
       impl->logfile_number_ = new_log_number;
       impl->log_ = new log::Writer(lfile);
       impl->mem_ = new MemTable(impl->internal_comparator_);
-      impl->mem_->Ref();
+      impl->mem_->Ref();  // TODO: 什么时候memtable需要Ref++
     }
   }
   if (s.ok() && save_manifest) {
     edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
     edit.SetLogNumber(impl->logfile_number_);
-    s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
+    s = impl->versions_->LogAndApply(
+        &edit, &impl->mutex_);  // apply edit, sync to manifest
   }
   if (s.ok()) {
-    impl->RemoveObsoleteFiles();
-    impl->MaybeScheduleCompaction();
+    impl->RemoveObsoleteFiles();      // 删除无用文件
+    impl->MaybeScheduleCompaction();  // 尝试Compact
   }
   impl->mutex_.Unlock();
+
   if (s.ok()) {
     assert(impl->mem_ != nullptr);
     *dbptr = impl;
