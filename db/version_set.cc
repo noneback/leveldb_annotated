@@ -4,16 +4,17 @@
 
 #include "db/version_set.h"
 
-#include <algorithm>
-#include <cstdio>
-
 #include "db/filename.h"
 #include "db/log_reader.h"
 #include "db/log_writer.h"
 #include "db/memtable.h"
 #include "db/table_cache.h"
+#include <algorithm>
+#include <cstdio>
+
 #include "leveldb/env.h"
 #include "leveldb/table_builder.h"
+
 #include "table/merger.h"
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
@@ -584,14 +585,15 @@ class VersionSet::Builder {
   };
 
   typedef std::set<FileMetaData*, BySmallestKey> FileSet;
+  // LevelState 要添加和要删除的文件的集合
   struct LevelState {
     std::set<uint64_t> deleted_files;
     FileSet* added_files;
   };
 
-  VersionSet* vset_;
-  Version* base_;
-  LevelState levels_[config::kNumLevels];
+  VersionSet* vset_; // versionSet
+  Version* base_; // current version
+  LevelState levels_[config::kNumLevels]; // save level file state change
 
  public:
   // Initialize a builder with the files from *base and other info from *vset
@@ -625,13 +627,14 @@ class VersionSet::Builder {
     base_->Unref();
   }
 
-  // Apply all of the edits in *edit to the current state.
+  // Apply all of the edits(compaction pointers, delete files, add files) in *edit to the current state.
+  // QA:怎么确定当前的version？base_ 指向当前version
   void Apply(const VersionEdit* edit) {
     // Update compaction pointers
     for (size_t i = 0; i < edit->compact_pointers_.size(); i++) {
       const int level = edit->compact_pointers_[i].first;
       vset_->compact_pointer_[level] =
-          edit->compact_pointers_[i].second.Encode().ToString();
+          edit->compact_pointers_[i].second.Encode().ToString(); // HINT: compact_pointers 与 MVCC无关，只需要在vset中保存一份就好
     }
 
     // Delete files
@@ -660,7 +663,7 @@ class VersionSet::Builder {
       // same as the compaction of 40KB of data.  We are a little
       // conservative and allow approximately one seek for every 16KB
       // of data before triggering a compaction.
-      f->allowed_seeks = static_cast<int>((f->file_size / 16384U));
+      f->allowed_seeks = static_cast<int>((f->file_size / 16384U)); // TODO: what is this for?
       if (f->allowed_seeks < 100) f->allowed_seeks = 100;
 
       levels_[level].deleted_files.erase(f->number);
@@ -668,27 +671,30 @@ class VersionSet::Builder {
     }
   }
 
-  // Save the current state in *v.
+  // SaveTo Save the current state into a new Version *v.
   void SaveTo(Version* v) {
     BySmallestKey cmp;
     cmp.internal_comparator = &vset_->icmp_;
+    // 
     for (int level = 0; level < config::kNumLevels; level++) {
       // Merge the set of added files with the set of pre-existing files.
       // Drop any deleted files.  Store the result in *v.
       const std::vector<FileMetaData*>& base_files = base_->files_[level];
       std::vector<FileMetaData*>::const_iterator base_iter = base_files.begin();
       std::vector<FileMetaData*>::const_iterator base_end = base_files.end();
+
+      // QA: 这一段什么意思？把base_（builder构建时version) 期间的Apply的 VersionEdit的level state change 保存到新的version中来，v
       const FileSet* added_files = levels_[level].added_files;
       v->files_[level].reserve(base_files.size() + added_files->size());
       for (const auto& added_file : *added_files) {
         // Add all smaller files listed in base_
         for (std::vector<FileMetaData*>::const_iterator bpos =
-                 std::upper_bound(base_iter, base_end, added_file, cmp);
+                 std::upper_bound(base_iter, base_end, added_file, cmp); // 找到base_file中第一个smallest key小于 added_file 的文件itr， bpos 前面的file都是有更大的smallest_key
              base_iter != bpos; ++base_iter) {
           MaybeAddFile(v, level, *base_iter);
         }
 
-        MaybeAddFile(v, level, added_file);
+        MaybeAddFile(v, level, added_file);  // 企图加入added_file
       }
 
       // Add remaining base files
@@ -714,6 +720,7 @@ class VersionSet::Builder {
     }
   }
 
+  // MaybeAddFile put file in into verison.files[level] if f is not deleted or do nothing if file is marked in deleted_files
   void MaybeAddFile(Version* v, int level, FileMetaData* f) {
     if (levels_[level].deleted_files.count(f->number) > 0) {
       // File is deleted: do nothing
@@ -757,6 +764,8 @@ VersionSet::~VersionSet() {
   delete descriptor_file_;
 }
 
+
+// AppendVersion append version to mvcc version linked list
 void VersionSet::AppendVersion(Version* v) {
   // Make "v" current
   assert(v->refs_ == 0);
@@ -774,6 +783,8 @@ void VersionSet::AppendVersion(Version* v) {
   v->next_->prev_ = v;
 }
 
+// LogAndApply 应用edit,，生成新version, 生成新manifest文件, 落盘, 替换current文件内容之后再并加入mvcc链表并替代成为最新的version
+// QA: 什么时候需要生成新的manifest文件？每次LogAndApply都需要吗？只有在descriptor == null 时才会有，也就是启动的时候
 Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   if (edit->has_log_number_) {
     assert(edit->log_number_ >= log_number_);
@@ -789,16 +800,19 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   edit->SetNextFile(next_file_number_);
   edit->SetLastSequence(last_sequence_);
 
+  //QA: 应用VersionEdit到新的Version中 ？
   Version* v = new Version(this);
   {
     Builder builder(this, current_);
-    builder.Apply(edit);
-    builder.SaveTo(v);
+    builder.Apply(edit); // apply VersionEdit 到当前的builder
+    builder.SaveTo(v); // 把builder缓存的变动保存到v中
   }
   Finalize(v);
 
   // Initialize new descriptor log file if necessary by creating
   // a temporary file that contains a snapshot of the current version.
+
+  // descriptor for manifest file operations
   std::string new_manifest_file;
   Status s;
   if (descriptor_log_ == nullptr) {
@@ -806,7 +820,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     // first call to LogAndApply (when opening the database).
     assert(descriptor_file_ == nullptr);
     new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
-    s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
+    s = env_->NewWritableFile(new_manifest_file, &descriptor_file_); // tmp file to store snapshot of current version
     if (s.ok()) {
       descriptor_log_ = new log::Writer(descriptor_file_);
       s = WriteSnapshot(descriptor_log_);
@@ -814,16 +828,17 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   }
 
   // Unlock during expensive MANIFEST log write
+  // 将edit写入新manifest文件，成功后更新current file
   {
     mu->Unlock();
 
     // Write new record to MANIFEST log
     if (s.ok()) {
       std::string record;
-      edit->EncodeTo(&record);
+      edit->EncodeTo(&record); // PS: edit has been applied
       s = descriptor_log_->AddRecord(record);
       if (s.ok()) {
-        s = descriptor_file_->Sync();
+        s = descriptor_file_->Sync();  // 落盘record
       }
       if (!s.ok()) {
         Log(options_->info_log, "MANIFEST write: %s\n", s.ToString().c_str());
@@ -833,7 +848,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     // If we just created a new descriptor file, install it by writing a
     // new CURRENT file that points to it.
     if (s.ok() && !new_manifest_file.empty()) {
-      s = SetCurrentFile(env_, dbname_, manifest_file_number_);
+      s = SetCurrentFile(env_, dbname_, manifest_file_number_); // 更新current文件内容
     }
 
     mu->Lock();
@@ -858,6 +873,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   return s;
 }
 
+// Recover 从manifest文件中恢复db上次运行时的状态
 Status VersionSet::Recover(bool* save_manifest) {
   struct LogReporter : public log::Reader::Reporter {
     Status* status;
@@ -876,9 +892,9 @@ Status VersionSet::Recover(bool* save_manifest) {
     return Status::Corruption("CURRENT file does not end with newline");
   }
   current.resize(current.size() - 1);
-
+  // 检查 MANIFEST
   std::string dscname = dbname_ + "/" + current;
-  SequentialFile* file;
+  SequentialFile* file;  // manifest file
   s = env_->NewSequentialFile(dscname, &file);
   if (!s.ok()) {
     if (s.IsNotFound()) {
@@ -899,6 +915,7 @@ Status VersionSet::Recover(bool* save_manifest) {
   Builder builder(this, current_);
   int read_records = 0;
 
+  // 从manifest中读取状态，并把原来记录的VersionEdit压缩成一个Version
   {
     LogReporter reporter;
     reporter.status = &s;
@@ -906,7 +923,8 @@ Status VersionSet::Recover(bool* save_manifest) {
                        0 /*initial_offset*/);
     Slice record;
     std::string scratch;
-    while (reader.ReadRecord(&record, &scratch) && s.ok()) {
+    while (reader.ReadRecord(&record, &scratch) &&
+           s.ok()) {  // 读取manifest中所有的record
       ++read_records;
       VersionEdit edit;
       s = edit.DecodeFrom(record);
@@ -920,9 +938,9 @@ Status VersionSet::Recover(bool* save_manifest) {
       }
 
       if (s.ok()) {
-        builder.Apply(&edit);
+        builder.Apply(&edit);  // replay 这个 version change
       }
-
+      // 检查MANIFEST最终状态的基本信息是否完整
       if (edit.has_log_number_) {
         log_number = edit.log_number_;
         have_log_number = true;
@@ -1021,13 +1039,14 @@ bool VersionSet::ReuseManifest(const std::string& dscname,
   manifest_file_number_ = manifest_number;
   return true;
 }
-
+// MarkFileNumberUsed 更新 next_file_number
 void VersionSet::MarkFileNumberUsed(uint64_t number) {
   if (next_file_number_ <= number) {
     next_file_number_ = number + 1;
   }
 }
 
+// Finalize Precomputed best level for next compaction and store info into v
 void VersionSet::Finalize(Version* v) {
   // Precomputed best level for next compaction
   int best_level = -1;
@@ -1066,6 +1085,7 @@ void VersionSet::Finalize(Version* v) {
   v->compaction_score_ = best_score;
 }
 
+// WriteSnaoshot write snapshot into log_file
 Status VersionSet::WriteSnapshot(log::Writer* log) {
   // TODO: Break up into multiple records to reduce memory usage on recovery?
 
@@ -1146,6 +1166,7 @@ uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
   return result;
 }
 
+// AddLiveFiles add all the files in all levels used in the mvcc version into live set
 void VersionSet::AddLiveFiles(std::set<uint64_t>* live) {
   for (Version* v = dummy_versions_.next_; v != &dummy_versions_;
        v = v->next_) {
