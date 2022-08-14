@@ -1226,9 +1226,9 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     return w.status;
   }
 
-  // May temporarily unlock and wait.
+  // May temporarily unlock and wait.  Make sure there is enougth space for current memtable.
   Status status = MakeRoomForWrite(updates == nullptr);
-  uint64_t last_sequence = versions_->LastSequence();
+  uint64_t last_sequence = versions_->LastSequence(); // logic timestamp
   Writer* last_writer = &w;
   if (status.ok() && updates != nullptr) {  // nullptr batch is for compactions
     WriteBatch* write_batch = BuildBatchGroup(&last_writer);
@@ -1286,6 +1286,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
 
 // REQUIRES: Writer list must be non-empty
 // REQUIRES: First writer must have a non-null batch
+// Compact batches last_writer into one batch.
 WriteBatch* DBImpl::BuildBatchGroup(Writer** last_writer) {
   mutex_.AssertHeld();
   assert(!writers_.empty());
@@ -1336,6 +1337,8 @@ WriteBatch* DBImpl::BuildBatchGroup(Writer** last_writer) {
 
 // REQUIRES: mutex_ is held
 // REQUIRES: this thread is currently at the front of the writer queue
+// MakeRoomForWrite check is there enough space to write in batch, if not turn memtable into immutable.
+// If l0 level has excessive files, it will slow writing down, or wait until compaction finishs.
 Status DBImpl::MakeRoomForWrite(bool force) {
   mutex_.AssertHeld();
   assert(!writers_.empty());
