@@ -1212,11 +1212,13 @@ Status DBImpl::Delete(const WriteOptions& options, const Slice& key) {
 }
 
 Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
+  // 1. init writer
   Writer w(&mutex_);
   w.batch = updates;
   w.sync = options.sync;
   w.done = false;
 
+ // 2. wait until schedule write task 
   MutexLock l(&mutex_);
   writers_.push_back(&w);
   while (!w.done && &w != writers_.front()) {
@@ -1225,13 +1227,13 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
   if (w.done) {
     return w.status;
   }
-
+  // 3. do write task
   // May temporarily unlock and wait.  Make sure there is enougth space for current memtable.
   Status status = MakeRoomForWrite(updates == nullptr);
   uint64_t last_sequence = versions_->LastSequence(); // logic timestamp
   Writer* last_writer = &w;
   if (status.ok() && updates != nullptr) {  // nullptr batch is for compactions
-    WriteBatch* write_batch = BuildBatchGroup(&last_writer);
+    WriteBatch* write_batch = BuildBatchGroup(&last_writer); // compact some writers into one batch.
     WriteBatchInternal::SetSequence(write_batch, last_sequence + 1);
     last_sequence += WriteBatchInternal::Count(write_batch);
 
@@ -1250,7 +1252,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
         }
       }
       if (status.ok()) {
-        status = WriteBatchInternal::InsertInto(write_batch, mem_);
+        status = WriteBatchInternal::InsertInto(write_batch, mem_); // insert batches into memtable.
       }
       mutex_.Lock();
       if (sync_error) {
@@ -1265,6 +1267,8 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     versions_->SetLastSequence(last_sequence);
   }
 
+  // 4. update writers status and signal ready one.
+  // in BuildBatchGroup, we compact compatible writers into batches to improve performance
   while (true) {
     Writer* ready = writers_.front();
     writers_.pop_front();
@@ -1286,7 +1290,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
 
 // REQUIRES: Writer list must be non-empty
 // REQUIRES: First writer must have a non-null batch
-// Compact batches last_writer into one batch.
+// Compact writers' batches last_writer into one batch.
 WriteBatch* DBImpl::BuildBatchGroup(Writer** last_writer) {
   mutex_.AssertHeld();
   assert(!writers_.empty());
@@ -1338,7 +1342,7 @@ WriteBatch* DBImpl::BuildBatchGroup(Writer** last_writer) {
 // REQUIRES: mutex_ is held
 // REQUIRES: this thread is currently at the front of the writer queue
 // MakeRoomForWrite check is there enough space to write in batch, if not turn memtable into immutable.
-// If l0 level has excessive files, it will slow writing down, or wait until compaction finishs.
+// If l0 level has excessive files, it will slow writing down, or wait until compaction finishes.
 Status DBImpl::MakeRoomForWrite(bool force) {
   mutex_.AssertHeld();
   assert(!writers_.empty());
