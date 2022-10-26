@@ -516,6 +516,7 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   return status;
 }
 
+// WriteLevel0Table dump imm into sst of level 0 in version base, create a version edit
 Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
                                 Version* base) {
   mutex_.AssertHeld();
@@ -542,6 +543,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
 
   // Note that if file_size is zero, the file has been deleted and
   // should not be added to the manifest.
+  // QA: enhancement
   int level = 0;
   if (s.ok() && meta.file_size > 0) {
     const Slice min_user_key = meta.smallest.user_key();
@@ -568,7 +570,7 @@ void DBImpl::CompactMemTable() {
   VersionEdit edit;
   Version* base = versions_->current();
   base->Ref();
-  Status s = WriteLevel0Table(imm_, &edit, base);
+  Status s = WriteLevel0Table(imm_, &edit, base); // turn imm into sst
   base->Unref();
 
   if (s.ok() && shutting_down_.load(std::memory_order_acquire)) {
@@ -712,12 +714,12 @@ void DBImpl::BackgroundCall() {
   MaybeScheduleCompaction();
   background_work_finished_signal_.SignalAll();
 }
-
+// 后台compaction任务
 void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
   if (imm_ != nullptr) {
-    CompactMemTable();
+    CompactMemTable(); // minor compaction
     return;
   }
 
@@ -1228,7 +1230,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     return w.status;
   }
   // 3. do write task
-  // May temporarily unlock and wait.  Make sure there is enougth space for current memtable.
+  // May temporarily unlock and wait.  Make sure there is enough space for current memtable.
   Status status = MakeRoomForWrite(updates == nullptr);
   uint64_t last_sequence = versions_->LastSequence(); // logic timestamp
   Writer* last_writer = &w;

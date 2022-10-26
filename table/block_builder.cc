@@ -58,6 +58,8 @@ size_t BlockBuilder::CurrentSizeEstimate() const {
           sizeof(uint32_t));                     // Restart array length
 }
 
+// Finish emit a block
+// buffer + restart point
 Slice BlockBuilder::Finish() {
   // Append restart array
   for (size_t i = 0; i < restarts_.size(); i++) {
