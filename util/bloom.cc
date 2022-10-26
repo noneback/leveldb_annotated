@@ -38,7 +38,7 @@ class BloomFilterPolicy : public FilterPolicy {
 
     const size_t init_size = dst->size();
     dst->resize(init_size + bytes, 0);
-    dst->push_back(static_cast<char>(k_));  // Remember # of probes in filter
+    dst->push_back(static_cast<char>(k_));  // Remember # of probes in filter, TODO: why we need to put k_ into dst??
     char* array = &(*dst)[init_size];
     for (int i = 0; i < n; i++) {
       // Use double-hashing to generate a sequence of hash values.
@@ -46,6 +46,7 @@ class BloomFilterPolicy : public FilterPolicy {
       uint32_t h = BloomHash(keys[i]);
       const uint32_t delta = (h >> 17) | (h << 15);  // Rotate right 17 bits
       for (size_t j = 0; j < k_; j++) {
+        // k times rehash
         const uint32_t bitpos = h % bits;
         array[bitpos / 8] |= (1 << (bitpos % 8));
         h += delta;
@@ -81,7 +82,7 @@ class BloomFilterPolicy : public FilterPolicy {
 
  private:
   size_t bits_per_key_;
-  size_t k_;
+  size_t k_;  // rehash counter
 };
 }  // namespace
 

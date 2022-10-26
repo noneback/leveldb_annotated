@@ -23,17 +23,17 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
   std::string fname = TableFileName(dbname, meta->number);
   if (iter->Valid()) {
     WritableFile* file;
-    s = env->NewWritableFile(fname, &file);
+    s = env->NewWritableFile(fname, &file); // new sst
     if (!s.ok()) {
       return s;
     }
 
     TableBuilder* builder = new TableBuilder(options, file);
-    meta->smallest.DecodeFrom(iter->key());
+    meta->smallest.DecodeFrom(iter->key()); // data in imm has already sorted
     Slice key;
     for (; iter->Valid(); iter->Next()) {
       key = iter->key();
-      builder->Add(key, iter->value());
+      builder->Add(key, iter->value());// add kv into sst, gen block
     }
     if (!key.empty()) {
       meta->largest.DecodeFrom(key);

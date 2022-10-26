@@ -43,7 +43,7 @@ class BlockBuilder {
  private:
   const Options* options_;
   std::string buffer_;              // Destination buffer
-  std::vector<uint32_t> restarts_;  // Restart points
+  std::vector<uint32_t> restarts_;  // Restart points, leveldb data block ues restart point as a interval data index, and saving storage
   int counter_;                     // Number of entries emitted since restart
   bool finished_;                   // Has Finish() been called?
   std::string last_key_;

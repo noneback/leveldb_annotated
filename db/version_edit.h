@@ -27,6 +27,7 @@ struct FileMetaData {
 };
 
 class VersionEdit {
+  // one change of version unit
  public:
   VersionEdit() { Clear(); }
   ~VersionEdit() = default;

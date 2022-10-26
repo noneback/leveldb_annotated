@@ -91,6 +91,7 @@ Status TableBuilder::ChangeOptions(const Options& options) {
   return Status::OK();
 }
 
+// Add add key + value into sst, emit block and maintain index block
 void TableBuilder::Add(const Slice& key, const Slice& value) {
   Rep* r = rep_;
   assert(!r->closed);
@@ -100,11 +101,15 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   }
 
   if (r->pending_index_entry) {
+    // pending_index_entry is true right after a data block has flushed
+    // at this point, we just emit a data block and receive the first kv of next block
+    // we should update the index block for previous data block before the next data block
+    // NOTE(noneback): each index block for a sst, store max key for each data block
     assert(r->data_block.empty());
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
     std::string handle_encoding;
-    r->pending_handle.EncodeTo(&handle_encoding);
-    r->index_block.Add(r->last_key, Slice(handle_encoding));
+    r->pending_handle.EncodeTo(&handle_encoding); // handle_encoding updates when a data block is flushed, containing block's offset and size
+    r->index_block.Add(r->last_key, Slice(handle_encoding)); // add block index  max_key => idx + size
     r->pending_index_entry = false;
   }
 
@@ -122,22 +127,25 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   }
 }
 
+// Flush flush 
 void TableBuilder::Flush() {
   Rep* r = rep_;
   assert(!r->closed);
   if (!ok()) return;
   if (r->data_block.empty()) return;
   assert(!r->pending_index_entry);
-  WriteBlock(&r->data_block, &r->pending_handle);
+  WriteBlock(&r->data_block, &r->pending_handle); 
   if (ok()) {
     r->pending_index_entry = true;
     r->status = r->file->Flush();
   }
   if (r->filter_block != nullptr) {
-    r->filter_block->StartBlock(r->offset);
+    r->filter_block->StartBlock(r->offset); // put filter index
   }
 }
 
+
+// WriteBlock write a data block and set the handle
 void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   // File format contains a sequence of blocks where each block has:
   //    block_data: uint8[n]
@@ -145,7 +153,7 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   //    crc: uint32
   assert(ok());
   Rep* r = rep_;
-  Slice raw = block->Finish();
+  Slice raw = block->Finish(); // data + restart point
 
   Slice block_contents;
   CompressionType type = r->options.compression;
@@ -176,7 +184,9 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
 
 void TableBuilder::WriteRawBlock(const Slice& block_contents,
                                  CompressionType type, BlockHandle* handle) {
+                                  // raw data blk content + type + crc
   Rep* r = rep_;
+  // update block offset and size for the caller
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
   r->status = r->file->Append(block_contents);

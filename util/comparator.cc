@@ -28,6 +28,7 @@ class BytewiseComparatorImpl : public Comparator {
     return a.compare(b);
   }
 
+// FindShortestSeparator find shortest index key to index between two block
   void FindShortestSeparator(std::string* start,
                              const Slice& limit) const override {
     // Find length of common prefix

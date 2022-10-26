@@ -516,6 +516,7 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   return status;
 }
 
+// WriteLevel0Table dump imm into sst of level 0 in version base, create a version edit
 Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
                                 Version* base) {
   mutex_.AssertHeld();
@@ -542,6 +543,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
 
   // Note that if file_size is zero, the file has been deleted and
   // should not be added to the manifest.
+  // QA: enhancement
   int level = 0;
   if (s.ok() && meta.file_size > 0) {
     const Slice min_user_key = meta.smallest.user_key();
@@ -568,7 +570,7 @@ void DBImpl::CompactMemTable() {
   VersionEdit edit;
   Version* base = versions_->current();
   base->Ref();
-  Status s = WriteLevel0Table(imm_, &edit, base);
+  Status s = WriteLevel0Table(imm_, &edit, base); // turn imm into sst
   base->Unref();
 
   if (s.ok() && shutting_down_.load(std::memory_order_acquire)) {
@@ -712,12 +714,12 @@ void DBImpl::BackgroundCall() {
   MaybeScheduleCompaction();
   background_work_finished_signal_.SignalAll();
 }
-
+// 后台compaction任务
 void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
   if (imm_ != nullptr) {
-    CompactMemTable();
+    CompactMemTable(); // minor compaction
     return;
   }
 
@@ -1130,7 +1132,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
                    std::string* value) {
   Status s;
   MutexLock l(&mutex_);
-  SequenceNumber snapshot;
+  SequenceNumber snapshot; // for snapshot read, last seqID if not set.
   if (options.snapshot != nullptr) {
     snapshot =
         static_cast<const SnapshotImpl*>(options.snapshot)->sequence_number();
@@ -1140,13 +1142,13 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
 
   MemTable* mem = mem_;
   MemTable* imm = imm_;
-  Version* current = versions_->current();
+  Version* current = versions_->current(); // read on current versions
   mem->Ref();
   if (imm != nullptr) imm->Ref();
   current->Ref();
 
   bool have_stat_update = false;
-  Version::GetStats stats;
+  Version::GetStats stats; // read opt statistic, can be used in compaction
 
   // Unlock while reading from files and memtables
   {
@@ -1158,14 +1160,15 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
       // Done
     } else {
+      // read from disk.
       s = current->Get(options, lkey, value, &stats);
       have_stat_update = true;
     }
-    mutex_.Lock();
+    mutex_.Lock(); // cuz we need to update metadata
   }
 
   if (have_stat_update && current->UpdateStats(stats)) {
-    MaybeScheduleCompaction();
+    MaybeScheduleCompaction(); // TODO: key point
   }
   mem->Unref();
   if (imm != nullptr) imm->Unref();
@@ -1228,7 +1231,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     return w.status;
   }
   // 3. do write task
-  // May temporarily unlock and wait.  Make sure there is enougth space for current memtable.
+  // May temporarily unlock and wait.  Make sure there is enough space for current memtable.
   Status status = MakeRoomForWrite(updates == nullptr);
   uint64_t last_sequence = versions_->LastSequence(); // logic timestamp
   Writer* last_writer = &w;

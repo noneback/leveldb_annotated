@@ -116,7 +116,7 @@ endif(BUILD_SHARED_LIBS)
 # Must be included before CMAKE_INSTALL_INCLUDEDIR is used.
 include(GNUInstallDirs)
 
-add_library(leveldb "")
+add_library(leveldb STATIC "")
 target_sources(leveldb
   PRIVATE
     "${PROJECT_BINARY_DIR}/${LEVELDB_PORT_CONFIG_DIR}/port_config.h"
@@ -359,6 +359,9 @@ if(LEVELDB_BUILD_TESTS)
   endif(NOT HAVE_CXX17_HAS_INCLUDE)
 
   add_test(NAME "leveldb_tests" COMMAND "leveldb_tests")
+
+  add_executable(main main.cc)
+  target_link_libraries(main leveldb)
 
   function(leveldb_test test_file)
     get_filename_component(test_target_name "${test_file}" NAME_WE)

@@ -11,6 +11,14 @@ namespace leveldb {
 
 TEST(ArenaTest, Empty) { Arena arena; }
 
+TEST(ArenaTest, Aligned) {
+  Arena arena;
+  const int size = 10;
+  std::vector<std::pair<size_t, char*>> allocated;
+  allocated.push_back(std::make_pair(size, arena.AllocateAligned(size)));
+  allocated.push_back(std::make_pair(size, arena.AllocateAligned(size)));
+}
+
 TEST(ArenaTest, Simple) {
   std::vector<std::pair<size_t, char*>> allocated;
   Arena arena;

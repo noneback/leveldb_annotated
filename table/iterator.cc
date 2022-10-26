@@ -23,6 +23,7 @@ Iterator::~Iterator() {
   }
 }
 
+// Register for clean up iterator when it closed
 void Iterator::RegisterCleanup(CleanupFunction func, void* arg1, void* arg2) {
   assert(func != nullptr);
   CleanupNode* node;
