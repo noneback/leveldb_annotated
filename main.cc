@@ -24,7 +24,7 @@ leveldb::Status s = db->Put(leveldb::WriteOptions(), std::to_string(2),std::to_s
     std::string key = std::to_string(i);
     std::string value = "a" + std::to_string(i);
     std::string get_value;
-    leveldb::Status s = db->Get(leveldb::ReadOptions(), key, &get_value);
+    s = db->Get(leveldb::ReadOptions(), key, &get_value);
     // 写入成功，就读取 key:people 对应的 value
 
     // 读取成功就输出
