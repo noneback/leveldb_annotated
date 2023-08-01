@@ -39,7 +39,7 @@ class Arena {
   char* AllocateNewBlock(size_t block_bytes);
 
   // Allocation state
-  char* alloc_ptr_;
+  char* alloc_ptr_; // lazy init, where alloc memory start
   size_t alloc_bytes_remaining_;
 
   // Array of new[] allocated memory blocks

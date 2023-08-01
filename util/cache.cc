@@ -43,9 +43,9 @@ namespace {
 struct LRUHandle {
   void* value;
   void (*deleter)(const Slice&, void* value);
-  LRUHandle* next_hash;
-  LRUHandle* next;
-  LRUHandle* prev;
+  LRUHandle* next_hash; // used in handleTable to chain Handles
+  LRUHandle* next; // used in cache rather than handleTable
+  LRUHandle* prev; // used in cache rather than handleTable
   size_t charge;  // TODO(opt): Only allow uint32_t?
   size_t key_length;
   bool in_cache;     // Whether entry is in the cache.
@@ -148,6 +148,7 @@ class HandleTable {
 };
 
 // A single shard of sharded cache.
+// Operation is thread-safe
 class LRUCache {
  public:
   LRUCache();
@@ -281,7 +282,7 @@ Cache::Handle* LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
   e->refs = 1;  // for the returned handle.
   std::memcpy(e->key_data, key.data(), key.size());
 
-  if (capacity_ > 0) {
+  if (capacity_ > 0) {  // TODO: what is this for?
     e->refs++;  // for the cache's reference.
     e->in_cache = true;
     LRU_Append(&in_use_, e);

@@ -19,16 +19,13 @@ int main() {
 
   assert(status.ok());
 
+leveldb::Status s = db->Put(leveldb::WriteOptions(), std::to_string(2),std::to_string(2));
   for (size_t i = 0; i < 1000000; i++) {
     std::string key = std::to_string(i);
-    std::string value = "a";
+    std::string value = "a" + std::to_string(i);
     std::string get_value;
-
-    // 写入 key1 -> value1
-    leveldb::Status s = db->Put(leveldb::WriteOptions(), key, value);
-
+    s = db->Get(leveldb::ReadOptions(), key, &get_value);
     // 写入成功，就读取 key:people 对应的 value
-    if (s.ok()) s = db->Get(leveldb::ReadOptions(), key, &get_value);
 
     // 读取成功就输出
     if (s.ok())

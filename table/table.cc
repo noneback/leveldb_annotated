@@ -35,6 +35,8 @@ struct Table::Rep {
   Block* index_block;
 };
 
+// 1. read footer
+// 2. read idx block
 Status Table::Open(const Options& options, RandomAccessFile* file,
                    uint64_t size, Table** table) {
   *table = nullptr;
@@ -73,7 +75,7 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
     rep->filter_data = nullptr;
     rep->filter = nullptr;
     *table = new Table(rep);
-    (*table)->ReadMeta(footer);
+    (*table)->ReadMeta(footer); // read bloom filter
   }
 
   return s;

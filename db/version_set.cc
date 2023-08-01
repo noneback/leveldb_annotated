@@ -279,6 +279,8 @@ static bool NewestFirst(FileMetaData* a, FileMetaData* b) {
   return a->number > b->number;
 }
 
+// 1. find level_0 files via table cache (func), whose key may overlap
+// 2. find level_i files via table cache.
 void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
                                  bool (*func)(void*, int, FileMetaData*)) {
   const Comparator* ucmp = vset_->icmp_.user_comparator();
@@ -337,14 +339,16 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 
     VersionSet* vset;
     Status s;
-    bool found;
+    bool found; // if key value is found
 
+    // Match see file f has kv. kv info is in State(arg)
     static bool Match(void* arg, int level, FileMetaData* f) {
-      State* state = reinterpret_cast<State*>(arg);
+         State* state = reinterpret_cast<State*>(arg);
 
       if (state->stats->seek_file == nullptr &&
           state->last_file_read != nullptr) {
         // We have had more than one seek for this read.  Charge the 1st file.
+        // TODO: what is this for?
         state->stats->seek_file = state->last_file_read;
         state->stats->seek_file_level = state->last_file_read_level;
       }
@@ -496,6 +500,7 @@ int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
 }
 
 // Store in "*inputs" all files in "level" that overlap [begin,end]
+// pick all wait-to-compact files in all levels into inputs, which are all overlapping [begin, end]
 void Version::GetOverlappingInputs(int level, const InternalKey* begin,
                                    const InternalKey* end,
                                    std::vector<FileMetaData*>* inputs) {
@@ -523,6 +528,8 @@ void Version::GetOverlappingInputs(int level, const InternalKey* begin,
       if (level == 0) {
         // Level-0 files may overlap each other.  So check if the newly
         // added file has expanded the range.  If so, restart search.
+        // QA(noneback): Why need to expand the range? Cuz L0 files may overlap, so when we find a find to compact, we need to compact all key range
+        // of the file. we need to take all file containing those keys into compaction.So we expand the range of compaction.
         if (begin != nullptr && user_cmp->Compare(file_start, user_begin) < 0) {
           user_begin = file_start;
           inputs->clear();
@@ -1250,7 +1257,7 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   int num = 0;
   for (int which = 0; which < 2; which++) {
     if (!c->inputs_[which].empty()) {
-      if (c->level() + which == 0) {
+      if (c->level() + which == 0) { // both zero
         const std::vector<FileMetaData*>& files = c->inputs_[which];
         for (size_t i = 0; i < files.size(); i++) {
           list[num++] = table_cache_->NewIterator(options, files[i]->number,
@@ -1287,6 +1294,7 @@ Compaction* VersionSet::PickCompaction() {
     // Pick the first file that comes after compact_pointer_[level]
     for (size_t i = 0; i < current_->files_[level].size(); i++) {
       FileMetaData* f = current_->files_[level][i];
+      // QA(noneback): what does compact_pointer for?
       if (compact_pointer_[level].empty() ||
           icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
         c->inputs_[0].push_back(f);
@@ -1403,10 +1411,12 @@ void AddBoundaryInputs(const InternalKeyComparator& icmp,
   }
 }
 
+// SetupOtherInput set input[1]
 void VersionSet::SetupOtherInputs(Compaction* c) {
   const int level = c->level();
   InternalKey smallest, largest;
-
+  // QA(noneback): handle with file boundaries. But why not handle it in find overlapping file step?
+  // cuz find overlapping based on internal key rather than user key. We need to cover those file owns same user key
   AddBoundaryInputs(icmp_, current_->files_[level], &c->inputs_[0]);
   GetRange(c->inputs_[0], &smallest, &largest);
 
@@ -1420,6 +1430,7 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
 
   // See if we can grow the number of inputs in "level" without
   // changing the number of "level+1" files we pick up.
+  // QA(noneback): what is the for?
   if (!c->inputs_[1].empty()) {
     std::vector<FileMetaData*> expanded0;
     current_->GetOverlappingInputs(level, &all_start, &all_limit, &expanded0);

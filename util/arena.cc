@@ -17,6 +17,7 @@ Arena::~Arena() {
   }
 }
 
+// AllocateFallback will allocate a new memory for bytes, size in bytes or kBlockSize
 char* Arena::AllocateFallback(size_t bytes) {
   if (bytes > kBlockSize / 4) {
     // Object is more than a quarter of our block size.  Allocate it separately
@@ -36,10 +37,10 @@ char* Arena::AllocateFallback(size_t bytes) {
 }
 
 char* Arena::AllocateAligned(size_t bytes) {
-  const int align = (sizeof(void*) > 8) ? sizeof(void*) : 8;
+  const int align = (sizeof(void*) > 8) ? sizeof(void*) : 8; // calculate address bytes
   static_assert((align & (align - 1)) == 0,
                 "Pointer size should be a power of 2");
-  size_t current_mod = reinterpret_cast<uintptr_t>(alloc_ptr_) & (align - 1);
+  size_t current_mod = reinterpret_cast<uintptr_t>(alloc_ptr_) & (align - 1); // tunr ptr into int to bit opts
   size_t slop = (current_mod == 0 ? 0 : align - current_mod);
   size_t needed = bytes + slop;
   char* result;
@@ -58,6 +59,7 @@ char* Arena::AllocateAligned(size_t bytes) {
 char* Arena::AllocateNewBlock(size_t block_bytes) {
   char* result = new char[block_bytes];
   blocks_.push_back(result);
+  // READ and ADD, add allocted bytes and address in block vector
   memory_usage_.fetch_add(block_bytes + sizeof(char*),
                           std::memory_order_relaxed);
   return result;
