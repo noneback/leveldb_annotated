@@ -726,7 +726,7 @@ void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
   if (imm_ != nullptr) {
-    CompactMemTable();  // minor compaction
+    CompactMemTable(); // minor compaction
     return;
   }
 
