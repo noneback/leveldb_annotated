@@ -13,6 +13,12 @@ Status OptimisticTransaction::Commit() {
 
 Status OptimisticTransaction::Get(const ReadOptions& options, const Slice& key,
                                   std::string* val) {
+  auto it = index_.find(key.data());
+  if (it != index_.end()) {
+    // find in index_, just return it.
+    *val = it->second;
+    return Status::OK();
+  }
   return txn_db_->Get(options, key, val);
 }
 
