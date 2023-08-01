@@ -15,9 +15,6 @@ class OptimisticTransactionDBImpl : public OptimisticTransactionDB {
   OptimisticTransactionDBImpl(DB* db,
                               const OptimisticTransactionDBOptions& occ_options)
       : OptimisticTransactionDB(db) {
-
-
-
     // TODO:
   }
   ~OptimisticTransactionDBImpl() {

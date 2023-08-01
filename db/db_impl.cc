@@ -321,7 +321,8 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     }
   } else {
     if (options_.error_if_exists) {
-      return Status::InvalidArgument(dbname_, "exists (error_if_exists is true)");
+      return Status::InvalidArgument(dbname_,
+                                     "exists (error_if_exists is true)");
     }
   }
 
@@ -516,7 +517,8 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   return status;
 }
 
-// WriteLevel0Table dump imm into sst of level 0 in version base, create a version edit
+// WriteLevel0Table dump imm into sst of level 0 in version base, create a
+// version edit
 Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
                                 Version* base) {
   mutex_.AssertHeld();
@@ -562,6 +564,11 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   return s;
 }
 
+SequenceNumber DBImpl::GetLastSeqNum() {
+  MutexLock l(&mutex_);
+  return versions_->LastSequence();
+}
+
 void DBImpl::CompactMemTable() {
   mutex_.AssertHeld();
   assert(imm_ != nullptr);
@@ -570,7 +577,7 @@ void DBImpl::CompactMemTable() {
   VersionEdit edit;
   Version* base = versions_->current();
   base->Ref();
-  Status s = WriteLevel0Table(imm_, &edit, base); // turn imm into sst
+  Status s = WriteLevel0Table(imm_, &edit, base);  // turn imm into sst
   base->Unref();
 
   if (s.ok() && shutting_down_.load(std::memory_order_acquire)) {
@@ -719,7 +726,7 @@ void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
   if (imm_ != nullptr) {
-    CompactMemTable(); // minor compaction
+    CompactMemTable();  // minor compaction
     return;
   }
 
@@ -1132,7 +1139,7 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
                    std::string* value) {
   Status s;
   MutexLock l(&mutex_);
-  SequenceNumber snapshot; // for snapshot read, last seqID if not set.
+  SequenceNumber snapshot;  // for snapshot read, last seqID if not set.
   if (options.snapshot != nullptr) {
     snapshot =
         static_cast<const SnapshotImpl*>(options.snapshot)->sequence_number();
@@ -1142,13 +1149,13 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
 
   MemTable* mem = mem_;
   MemTable* imm = imm_;
-  Version* current = versions_->current(); // read on current versions
+  Version* current = versions_->current();  // read on current versions
   mem->Ref();
   if (imm != nullptr) imm->Ref();
   current->Ref();
 
   bool have_stat_update = false;
-  Version::GetStats stats; // read opt statistic, can be used in compaction
+  Version::GetStats stats;  // read opt statistic, can be used in compaction
 
   // Unlock while reading from files and memtables
   {
@@ -1164,11 +1171,11 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
       s = current->Get(options, lkey, value, &stats);
       have_stat_update = true;
     }
-    mutex_.Lock(); // cuz we need to update metadata
+    mutex_.Lock();  // cuz we need to update metadata
   }
 
   if (have_stat_update && current->UpdateStats(stats)) {
-    MaybeScheduleCompaction(); // TODO: key point
+    MaybeScheduleCompaction();  // TODO: key point
   }
   mem->Unref();
   if (imm != nullptr) imm->Unref();
@@ -1221,7 +1228,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
   w.sync = options.sync;
   w.done = false;
 
- // 2. wait until schedule write task 
+  // 2. wait until schedule write task
   MutexLock l(&mutex_);
   writers_.push_back(&w);
   while (!w.done && &w != writers_.front()) {
@@ -1231,12 +1238,14 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     return w.status;
   }
   // 3. do write task
-  // May temporarily unlock and wait.  Make sure there is enough space for current memtable.
+  // May temporarily unlock and wait.  Make sure there is enough space for
+  // current memtable.
   Status status = MakeRoomForWrite(updates == nullptr);
-  uint64_t last_sequence = versions_->LastSequence(); // logic timestamp
+  uint64_t last_sequence = versions_->LastSequence();  // logic timestamp
   Writer* last_writer = &w;
   if (status.ok() && updates != nullptr) {  // nullptr batch is for compactions
-    WriteBatch* write_batch = BuildBatchGroup(&last_writer); // compact some writers into one batch.
+    WriteBatch* write_batch =
+        BuildBatchGroup(&last_writer);  // compact some writers into one batch.
     WriteBatchInternal::SetSequence(write_batch, last_sequence + 1);
     last_sequence += WriteBatchInternal::Count(write_batch);
 
@@ -1255,7 +1264,8 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
         }
       }
       if (status.ok()) {
-        status = WriteBatchInternal::InsertInto(write_batch, mem_); // insert batches into memtable.
+        status = WriteBatchInternal::InsertInto(
+            write_batch, mem_);  // insert batches into memtable.
       }
       mutex_.Lock();
       if (sync_error) {
@@ -1271,7 +1281,8 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
   }
 
   // 4. update writers status and signal ready one.
-  // in BuildBatchGroup, we compact compatible writers into batches to improve performance
+  // in BuildBatchGroup, we compact compatible writers into batches to improve
+  // performance
   while (true) {
     Writer* ready = writers_.front();
     writers_.pop_front();
@@ -1344,8 +1355,9 @@ WriteBatch* DBImpl::BuildBatchGroup(Writer** last_writer) {
 
 // REQUIRES: mutex_ is held
 // REQUIRES: this thread is currently at the front of the writer queue
-// MakeRoomForWrite check is there enough space to write in batch, if not turn memtable into immutable.
-// If l0 level has excessive files, it will slow writing down, or wait until compaction finishes.
+// MakeRoomForWrite check is there enough space to write in batch, if not turn
+// memtable into immutable. If l0 level has excessive files, it will slow
+// writing down, or wait until compaction finishes.
 Status DBImpl::MakeRoomForWrite(bool force) {
   mutex_.AssertHeld();
   assert(!writers_.empty());
@@ -1514,14 +1526,18 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   impl->mutex_.Lock();
   VersionEdit edit;
   // Recover handles create_if_missing, error_if_exists
-  bool save_manifest = false;  // QA: 这个变量的作用是什么？记录是否需要保存manifest, 一般来说都需要
-  Status s = impl->Recover(&edit, &save_manifest);  // 从元数据文件和log文件中回复DB状态
+  bool save_manifest =
+      false;  // QA: 这个变量的作用是什么？记录是否需要保存manifest,
+              // 一般来说都需要
+  Status s = impl->Recover(
+      &edit, &save_manifest);  // 从元数据文件和log文件中回复DB状态
 
   if (s.ok() && impl->mem_ == nullptr) {
     // Create new log and a corresponding memtable.
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     WritableFile* lfile;
-    s = options.env->NewWritableFile(LogFileName(dbname, new_log_number), &lfile);
+    s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
+                                     &lfile);
     if (s.ok()) {
       edit.SetLogNumber(new_log_number);
       impl->logfile_ = lfile;

@@ -17,6 +17,20 @@ class TransactionDB {
 
   DB* GetBaseDB() { return db_; }
 
+  Status Put(const WriteOptions& options, const Slice& key,
+             const Slice& value) {
+    return db_->Put(options, key, value);
+  }
+  Status Get(const ReadOptions& options, const Slice& key, std::string* value) {
+    return db_->Get(options, key, value);
+  }
+  Status Write(const WriteOptions& options, WriteBatch* updates) {
+    return db_->Write(options, updates);
+  }
+  Status Delete(const WriteOptions& options, const Slice& key) {
+    return db_->Delete(options, key);
+  }
+
  protected:
   DB* db_;
   DBImpl* db_impl_;

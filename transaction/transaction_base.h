@@ -8,7 +8,7 @@
 #include "transaction.h"
 
 namespace leveldb {
-class transaction_base : public Transaction {};
+class TransactionBase : public Transaction {};
 }  // namespace leveldb
 
 #endif  // LEVELDB_TRANSACTION_BASE_H
